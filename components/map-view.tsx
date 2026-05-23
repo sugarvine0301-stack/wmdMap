@@ -3,6 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { LayersIcon, MapPinnedIcon } from "@/components/map-control-icons";
+import {
+  useGeolocation,
+  type GeolocationCoords,
+} from "@/hooks/use-geolocation";
 import { getSpotPinColor, resolveSpotImageUrl } from "@/lib/spots";
 import { appUi } from "@/lib/ui";
 import type { Spot } from "@/lib/supabase";
@@ -11,6 +16,14 @@ const CENTER: [number, number] = [127.368, 36.1254];
 const DEFAULT_ZOOM = 15;
 const FOCUS_ZOOM = 17;
 const PANEL_TRANSITION_MS = 320;
+
+/** 地図上のカスタムコントロール（レイヤー・現在地）共通スタイル */
+const MAP_CONTROL_BUTTON_CLASS =
+  "flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/70 bg-white/85 text-slate-700 shadow-md backdrop-blur-sm transition-colors hover:bg-white/95 disabled:cursor-not-allowed disabled:opacity-50";
+
+/** ズームボタン（+ / −） */
+const MAP_ZOOM_BUTTON_CLASS =
+  "flex h-10 w-10 shrink-0 items-center justify-center text-lg font-medium leading-none text-slate-700 transition-colors hover:bg-white/95 disabled:cursor-not-allowed disabled:opacity-50";
 
 const BASEMAP_TILES: Record<"standard" | "satellite", string[]> = {
   standard: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
@@ -63,6 +76,145 @@ const PIN_BODY_PATH = `M${PIN_TIP_X} 2C9.4 2 5 6.6 5 12.1C5 17.4 ${PIN_TIP_X} ${
 const PIN_HOLE_CX = PIN_TIP_X;
 const PIN_HOLE_CY = 11.5;
 const PIN_HOLE_R = 4.8;
+
+const USER_LOCATION_DEFAULT_ACCURACY_M = 25;
+const USER_LOCATION_MIN_HALO_PX = 28;
+const USER_LOCATION_MAX_HALO_PX = 140;
+
+type UserLocationMarkerParts = {
+  root: HTMLElement;
+  beam: HTMLElement;
+};
+
+function accuracyMetersToPixelRadius(
+  meters: number,
+  latitude: number,
+  zoom: number
+): number {
+  const metersPerPixel =
+    (40075016.686 * Math.cos((latitude * Math.PI) / 180)) / Math.pow(2, zoom + 8);
+  if (!Number.isFinite(metersPerPixel) || metersPerPixel <= 0) {
+    return USER_LOCATION_MIN_HALO_PX;
+  }
+  return meters / metersPerPixel;
+}
+
+function getUserLocationAccuracyRadiusPx(
+  position: GeolocationCoords,
+  zoom: number
+): number {
+  const accuracy =
+    Number.isFinite(position.accuracy) && position.accuracy > 0
+      ? position.accuracy
+      : USER_LOCATION_DEFAULT_ACCURACY_M;
+
+  return Math.min(
+    USER_LOCATION_MAX_HALO_PX,
+    Math.max(
+      USER_LOCATION_MIN_HALO_PX,
+      accuracyMetersToPixelRadius(accuracy, position.latitude, zoom)
+    )
+  );
+}
+
+function createUserLocationMarkerElement(): UserLocationMarkerParts {
+  const root = document.createElement("div");
+  root.className = "user-location-marker";
+  root.style.width = `${USER_LOCATION_MIN_HALO_PX * 2}px`;
+  root.style.height = `${USER_LOCATION_MIN_HALO_PX * 2}px`;
+  root.style.overflow = "visible";
+  root.style.pointerEvents = "none";
+  root.setAttribute("aria-hidden", "true");
+
+  const halo = document.createElement("div");
+  halo.className = "user-location-marker__halo";
+
+  const beam = document.createElement("div");
+  beam.className = "user-location-marker__beam";
+  beam.setAttribute("aria-hidden", "true");
+
+  const beamSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  beamSvg.setAttribute("class", "user-location-marker__beam-svg");
+  beamSvg.setAttribute("viewBox", "0 0 48 56");
+  beamSvg.setAttribute("width", "48");
+  beamSvg.setAttribute("height", "56");
+  beamSvg.setAttribute("aria-hidden", "true");
+
+  const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+  const gradient = document.createElementNS(
+    "http://www.w3.org/2000/svg",
+    "linearGradient"
+  );
+  gradient.setAttribute("id", "user-location-beam-gradient");
+  gradient.setAttribute("x1", "0%");
+  gradient.setAttribute("y1", "0%");
+  gradient.setAttribute("x2", "0%");
+  gradient.setAttribute("y2", "100%");
+
+  const stopTop = document.createElementNS("http://www.w3.org/2000/svg", "stop");
+  stopTop.setAttribute("offset", "0%");
+  stopTop.setAttribute("stop-color", "#38bdf8");
+  stopTop.setAttribute("stop-opacity", "0.9");
+
+  const stopBottom = document.createElementNS(
+    "http://www.w3.org/2000/svg",
+    "stop"
+  );
+  stopBottom.setAttribute("offset", "100%");
+  stopBottom.setAttribute("stop-color", "#7dd3fc");
+  stopBottom.setAttribute("stop-opacity", "0");
+
+  gradient.appendChild(stopTop);
+  gradient.appendChild(stopBottom);
+  defs.appendChild(gradient);
+  beamSvg.appendChild(defs);
+
+  const wedge = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  wedge.setAttribute("d", "M24 4 L44 52 L4 52 Z");
+  wedge.setAttribute("fill", "url(#user-location-beam-gradient)");
+  wedge.setAttribute("stroke", "rgba(255,255,255,0.55)");
+  wedge.setAttribute("stroke-width", "1");
+  beamSvg.appendChild(wedge);
+  beam.appendChild(beamSvg);
+
+  const dot = document.createElement("div");
+  dot.className = "user-location-marker__dot";
+
+  root.appendChild(halo);
+  root.appendChild(beam);
+  root.appendChild(dot);
+
+  return { root, beam };
+}
+
+function updateUserLocationMarkerSize(
+  root: HTMLElement,
+  position: GeolocationCoords,
+  zoom: number
+) {
+  const diameterPx = getUserLocationAccuracyRadiusPx(position, zoom) * 2;
+  root.style.width = `${diameterPx}px`;
+  root.style.height = `${diameterPx}px`;
+}
+
+function updateUserLocationMarkerHeading(
+  beam: HTMLElement,
+  heading: number | null,
+  mapBearing: number
+) {
+  if (heading == null) {
+    beam.style.opacity = "0";
+    beam.style.transform = "rotate(0deg)";
+    beam.dataset.heading = "";
+    return;
+  }
+
+  const rotation = heading - mapBearing;
+  beam.style.opacity = "1";
+  beam.style.transform = `rotate(${rotation}deg)`;
+  beam.dataset.heading = String(Math.round(heading));
+  beam.dataset.rotation = String(Math.round(rotation));
+}
 
 function createMarkerElement(color: string, isSelected: boolean): HTMLElement {
   const element = document.createElement("div");
@@ -163,11 +315,26 @@ export function MapView({
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markersBySpotIdRef = useRef<Map<string, MarkerEntry>>(new Map());
+  const userLocationMarkerRef = useRef<maplibregl.Marker | null>(null);
+  const userLocationMarkerPartsRef = useRef<UserLocationMarkerParts | null>(
+    null
+  );
+  const hasCenteredOnUserRef = useRef(false);
   const popupRef = useRef<maplibregl.Popup | null>(null);
   const isMobileRef = useRef(isMobile);
   const [basemap, setBasemap] = useState<Basemap>("satellite");
   const [mapReady, setMapReady] = useState(false);
   const [activeSpotId, setActiveSpotId] = useState<string | null>(null);
+
+  const {
+    position: userPosition,
+    loading: geolocationLoading,
+    error: geolocationError,
+    heading: deviceHeading,
+    headingPermission,
+    requestHeadingPermission,
+    retryLocation,
+  } = useGeolocation({ enabled: active });
 
   isMobileRef.current = isMobile;
 
@@ -259,7 +426,6 @@ export function MapView({
       },
     });
 
-    map.addControl(new maplibregl.NavigationControl(), "top-right");
     mapRef.current = map;
 
     map.on("load", () => {
@@ -272,12 +438,16 @@ export function MapView({
 
     return () => {
       closePopup();
+      userLocationMarkerRef.current?.remove();
+      userLocationMarkerRef.current = null;
+      userLocationMarkerPartsRef.current = null;
       for (const entry of markersBySpotIdRef.current.values()) {
         entry.marker.remove();
       }
       markersBySpotIdRef.current.clear();
       map.remove();
       mapRef.current = null;
+      hasCenteredOnUserRef.current = false;
       setMapReady(false);
     };
   }, [clearSelection, closePopup]);
@@ -398,6 +568,111 @@ export function MapView({
     };
   }, [focusRequest, mapReady, active, spots, onFocusComplete, selectSpot]);
 
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady || !active) return;
+
+    if (!userPosition) {
+      userLocationMarkerRef.current?.remove();
+      userLocationMarkerRef.current = null;
+      userLocationMarkerPartsRef.current = null;
+      return;
+    }
+
+    const lngLat: [number, number] = [
+      userPosition.longitude,
+      userPosition.latitude,
+    ];
+
+    if (!userLocationMarkerRef.current) {
+      const parts = createUserLocationMarkerElement();
+      userLocationMarkerPartsRef.current = parts;
+      userLocationMarkerRef.current = new maplibregl.Marker({
+        element: parts.root,
+        anchor: "center",
+      })
+        .setLngLat(lngLat)
+        .addTo(map);
+    } else {
+      userLocationMarkerRef.current.setLngLat(lngLat);
+    }
+
+    const parts = userLocationMarkerPartsRef.current;
+    if (!parts) return;
+
+    const syncMarkerLayout = () => {
+      updateUserLocationMarkerSize(parts.root, userPosition, map.getZoom());
+      updateUserLocationMarkerHeading(
+        parts.beam,
+        deviceHeading,
+        map.getBearing()
+      );
+    };
+
+    syncMarkerLayout();
+    map.on("zoom", syncMarkerLayout);
+    map.on("move", syncMarkerLayout);
+    map.on("rotate", syncMarkerLayout);
+
+    return () => {
+      map.off("zoom", syncMarkerLayout);
+      map.off("move", syncMarkerLayout);
+      map.off("rotate", syncMarkerLayout);
+    };
+  }, [userPosition, deviceHeading, mapReady, active]);
+
+  useEffect(() => {
+    const parts = userLocationMarkerPartsRef.current;
+    const map = mapRef.current;
+    if (!parts || !map) return;
+
+    updateUserLocationMarkerHeading(
+      parts.beam,
+      deviceHeading,
+      map.getBearing()
+    );
+  }, [deviceHeading]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady || !userPosition || !active) return;
+    if (hasCenteredOnUserRef.current || focusRequest) return;
+
+    hasCenteredOnUserRef.current = true;
+    map.flyTo({
+      center: [userPosition.longitude, userPosition.latitude],
+      zoom: DEFAULT_ZOOM,
+      duration: 1000,
+      essential: true,
+    });
+  }, [userPosition, mapReady, active, focusRequest]);
+
+  const centerOnUser = useCallback(async () => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const target = userPosition ?? (await retryLocation());
+    if (!target) return;
+
+    // 方角表示にはユーザ操作が必要（iOS はここでコンパス許可ダイアログが出る）
+    await requestHeadingPermission();
+
+    map.flyTo({
+      center: [target.longitude, target.latitude],
+      zoom: Math.max(map.getZoom(), DEFAULT_ZOOM),
+      duration: 800,
+      essential: true,
+    });
+  }, [userPosition, retryLocation, requestHeadingPermission]);
+
+  const handleZoomIn = useCallback(() => {
+    mapRef.current?.zoomIn({ duration: 250 });
+  }, []);
+
+  const handleZoomOut = useCallback(() => {
+    mapRef.current?.zoomOut({ duration: 250 });
+  }, []);
+
   function toggleBasemap() {
     setBasemap((current) =>
       current === "standard" ? "satellite" : "standard"
@@ -408,13 +683,70 @@ export function MapView({
     <div className={appUi.mapFrameOuter}>
       <div className={appUi.mapFrameInner}>
         <div ref={mapContainer} className="h-full w-full" />
-        <button
-          type="button"
-          onClick={toggleBasemap}
-          className="absolute right-3 top-3 z-10 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-md hover:bg-slate-50 md:right-14 md:top-4"
+        <div
+          className="pointer-events-none absolute right-3 top-3 z-10 flex flex-row items-center gap-2"
+          role="group"
+          aria-label="地図コントロール"
         >
-          {basemap === "satellite" ? "通常の地図" : "衛星写真"}
-        </button>
+          <div className="pointer-events-auto flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={toggleBasemap}
+              title={
+                basemap === "satellite"
+                  ? "通常の地図に切り替え"
+                  : "衛星写真に切り替え"
+              }
+              className={MAP_CONTROL_BUTTON_CLASS}
+              aria-label={
+                basemap === "satellite"
+                  ? "通常の地図に切り替え"
+                  : "衛星写真に切り替え"
+              }
+            >
+              <LayersIcon />
+            </button>
+            <button
+              type="button"
+              onClick={centerOnUser}
+              title={
+                geolocationError ??
+                (headingPermission === "denied"
+                  ? "方角の取得が拒否されています。設定でコンパス（モーション）を許可してください"
+                  : geolocationLoading
+                    ? "現在地を取得中…（タップで再取得）"
+                    : deviceHeading == null
+                      ? "現在地へ移動（方角表示の許可も求めます）"
+                      : "現在地へ移動")
+              }
+              className={`${MAP_CONTROL_BUTTON_CLASS}${geolocationLoading ? " opacity-70" : ""}`}
+              aria-label="現在地へ移動"
+              aria-busy={geolocationLoading}
+            >
+              <MapPinnedIcon />
+            </button>
+          </div>
+          <div className="pointer-events-auto flex flex-col overflow-hidden rounded-lg border border-white/70 bg-white/85 shadow-md backdrop-blur-sm">
+            <button
+              type="button"
+              onClick={handleZoomIn}
+              disabled={!mapReady}
+              className={`${MAP_ZOOM_BUTTON_CLASS} border-b border-slate-200/50`}
+              aria-label="ズームイン"
+            >
+              +
+            </button>
+            <button
+              type="button"
+              onClick={handleZoomOut}
+              disabled={!mapReady}
+              className={MAP_ZOOM_BUTTON_CLASS}
+              aria-label="ズームアウト"
+            >
+              −
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
