@@ -3,11 +3,8 @@ type MapControlIconProps = {
   size?: number;
 };
 
-/** 地図の上に立つピン（Lucide MapPinned 相当） */
-export function MapPinnedIcon({
-  className,
-  size = 20,
-}: MapControlIconProps) {
+/** コンパス（Lucide Compass 相当） */
+export function CompassIcon({ className, size = 20 }: MapControlIconProps) {
   return (
     <svg
       width={size}
@@ -21,9 +18,8 @@ export function MapPinnedIcon({
       className={className}
       aria-hidden
     >
-      <path d="M18 8c0 3.613-3.869 7.429-5.393 8.795a1 1 0 0 1-1.214 0C9.87 15.429 6 11.613 6 8a6 6 0 1 1 12 0" />
-      <circle cx="12" cy="8" r="2" />
-      <path d="M8.714 14.677 8 21h8l-.714-6.323" />
+      <circle cx="12" cy="12" r="10" />
+      <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88" />
     </svg>
   );
 }

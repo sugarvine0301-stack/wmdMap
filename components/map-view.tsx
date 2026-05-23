@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { LayersIcon, MapPinnedIcon } from "@/components/map-control-icons";
+import { CompassIcon, LayersIcon } from "@/components/map-control-icons";
 import {
   useGeolocation,
   type GeolocationCoords,
@@ -117,7 +117,28 @@ function getUserLocationAccuracyRadiusPx(
   );
 }
 
+const USER_LOCATION_BEAM_HALF_ANGLE_DEG = 32;
+const USER_LOCATION_BEAM_LENGTH = 40;
+const USER_LOCATION_BEAM_APEX_X = 24;
+const USER_LOCATION_BEAM_APEX_Y = 24;
+
+function buildUserLocationBeamConePath(): string {
+  const rad = (USER_LOCATION_BEAM_HALF_ANGLE_DEG * Math.PI) / 180;
+  const { x: apexX, y: apexY } = {
+    x: USER_LOCATION_BEAM_APEX_X,
+    y: USER_LOCATION_BEAM_APEX_Y,
+  };
+  const leftX = apexX - USER_LOCATION_BEAM_LENGTH * Math.sin(rad);
+  const leftY = apexY - USER_LOCATION_BEAM_LENGTH * Math.cos(rad);
+  const rightX = apexX + USER_LOCATION_BEAM_LENGTH * Math.sin(rad);
+  const rightY = apexY - USER_LOCATION_BEAM_LENGTH * Math.cos(rad);
+
+  return `M ${apexX} ${apexY} L ${leftX} ${leftY} A ${USER_LOCATION_BEAM_LENGTH} ${USER_LOCATION_BEAM_LENGTH} 0 0 1 ${rightX} ${rightY} Z`;
+}
+
 function createUserLocationMarkerElement(): UserLocationMarkerParts {
+  const gradientId = `user-location-beam-gradient-${Math.random().toString(36).slice(2, 9)}`;
+
   const root = document.createElement("div");
   root.className = "user-location-marker";
   root.style.width = `${USER_LOCATION_MIN_HALO_PX * 2}px`;
@@ -135,46 +156,44 @@ function createUserLocationMarkerElement(): UserLocationMarkerParts {
 
   const beamSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   beamSvg.setAttribute("class", "user-location-marker__beam-svg");
-  beamSvg.setAttribute("viewBox", "0 0 48 56");
-  beamSvg.setAttribute("width", "48");
-  beamSvg.setAttribute("height", "56");
+  beamSvg.setAttribute("viewBox", "-2 -16 52 52");
   beamSvg.setAttribute("aria-hidden", "true");
 
   const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
   const gradient = document.createElementNS(
     "http://www.w3.org/2000/svg",
-    "linearGradient"
+    "radialGradient"
   );
-  gradient.setAttribute("id", "user-location-beam-gradient");
-  gradient.setAttribute("x1", "0%");
-  gradient.setAttribute("y1", "0%");
-  gradient.setAttribute("x2", "0%");
-  gradient.setAttribute("y2", "100%");
+  gradient.setAttribute("id", gradientId);
+  gradient.setAttribute("cx", "50%");
+  gradient.setAttribute("cy", "55%");
+  gradient.setAttribute("r", "75%");
 
-  const stopTop = document.createElementNS("http://www.w3.org/2000/svg", "stop");
-  stopTop.setAttribute("offset", "0%");
-  stopTop.setAttribute("stop-color", "#38bdf8");
-  stopTop.setAttribute("stop-opacity", "0.9");
+  const stopInner = document.createElementNS("http://www.w3.org/2000/svg", "stop");
+  stopInner.setAttribute("offset", "0%");
+  stopInner.setAttribute("stop-color", "#38bdf8");
+  stopInner.setAttribute("stop-opacity", "0.55");
 
-  const stopBottom = document.createElementNS(
-    "http://www.w3.org/2000/svg",
-    "stop"
-  );
-  stopBottom.setAttribute("offset", "100%");
-  stopBottom.setAttribute("stop-color", "#7dd3fc");
-  stopBottom.setAttribute("stop-opacity", "0");
+  const stopMid = document.createElementNS("http://www.w3.org/2000/svg", "stop");
+  stopMid.setAttribute("offset", "55%");
+  stopMid.setAttribute("stop-color", "#7dd3fc");
+  stopMid.setAttribute("stop-opacity", "0.28");
 
-  gradient.appendChild(stopTop);
-  gradient.appendChild(stopBottom);
+  const stopOuter = document.createElementNS("http://www.w3.org/2000/svg", "stop");
+  stopOuter.setAttribute("offset", "100%");
+  stopOuter.setAttribute("stop-color", "#bae6fd");
+  stopOuter.setAttribute("stop-opacity", "0");
+
+  gradient.appendChild(stopInner);
+  gradient.appendChild(stopMid);
+  gradient.appendChild(stopOuter);
   defs.appendChild(gradient);
   beamSvg.appendChild(defs);
 
-  const wedge = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  wedge.setAttribute("d", "M24 4 L44 52 L4 52 Z");
-  wedge.setAttribute("fill", "url(#user-location-beam-gradient)");
-  wedge.setAttribute("stroke", "rgba(255,255,255,0.55)");
-  wedge.setAttribute("stroke-width", "1");
-  beamSvg.appendChild(wedge);
+  const cone = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  cone.setAttribute("d", buildUserLocationBeamConePath());
+  cone.setAttribute("fill", `url(#${gradientId})`);
+  beamSvg.appendChild(cone);
   beam.appendChild(beamSvg);
 
   const dot = document.createElement("div");
@@ -723,7 +742,7 @@ export function MapView({
               aria-label="現在地へ移動"
               aria-busy={geolocationLoading}
             >
-              <MapPinnedIcon />
+              <CompassIcon />
             </button>
           </div>
           <div className="pointer-events-auto flex flex-col overflow-hidden rounded-lg border border-white/70 bg-white/85 shadow-md backdrop-blur-sm">

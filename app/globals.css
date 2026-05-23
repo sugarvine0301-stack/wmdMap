@@ -73,21 +73,23 @@ body {
   transform-origin: center center;
   opacity: 0;
   transition:
-    transform 0.2s ease-out,
-    opacity 0.2s ease-out;
+    transform 0.25s ease-out,
+    opacity 0.25s ease-out;
   pointer-events: none;
+  will-change: transform;
 }
 
+/* 青いドットを起点に前方へ広がる扇形（懐中電灯コーン） */
 .user-location-marker__beam-svg {
   position: absolute;
   left: 50%;
   top: 50%;
   display: block;
-  width: 48px;
-  height: 56px;
-  transform: translate(-50%, -100%);
-  transform-origin: 50% 100%;
-  filter: drop-shadow(0 2px 6px rgba(8, 145, 178, 0.5));
+  width: 52px;
+  height: 52px;
+  overflow: visible;
+  transform: translate(-50%, -50%);
+  transform-origin: 50% 50%;
   pointer-events: none;
 }
 
