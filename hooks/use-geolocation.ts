@@ -15,15 +15,23 @@ export type HeadingPermissionState =
   | "denied";
 
 type UseGeolocationOptions = {
-  /** false のときは位置情報の取得を行わない */
   enabled?: boolean;
-  enableHighAccuracy?: boolean;
-  maximumAge?: number;
-  timeout?: number;
 };
 
-type DeviceOrientationEventConstructor = typeof DeviceOrientationEvent & {
+type DeviceOrientationCtor = typeof DeviceOrientationEvent & {
   requestPermission?: () => Promise<PermissionState>;
+};
+
+const WATCH_OPTIONS: PositionOptions = {
+  enableHighAccuracy: true,
+  maximumAge: 5_000,
+  timeout: 15_000,
+};
+
+const FAST_OPTIONS: PositionOptions = {
+  enableHighAccuracy: false,
+  maximumAge: 30_000,
+  timeout: 8_000,
 };
 
 function geolocationErrorMessage(code: number): string {
@@ -44,63 +52,49 @@ function normalizeHeading(degrees: number): number {
 }
 
 function readDeviceHeading(event: DeviceOrientationEvent): number | null {
-  const extended = event as DeviceOrientationEvent & {
-    webkitCompassHeading?: number;
-  };
-
-  // iOS Safari（deviceorientation で提供）
+  const ext = event as DeviceOrientationEvent & { webkitCompassHeading?: number };
   if (
-    typeof extended.webkitCompassHeading === "number" &&
-    !Number.isNaN(extended.webkitCompassHeading) &&
-    extended.webkitCompassHeading >= 0
+    typeof ext.webkitCompassHeading === "number" &&
+    !Number.isNaN(ext.webkitCompassHeading) &&
+    ext.webkitCompassHeading >= 0
   ) {
-    return normalizeHeading(extended.webkitCompassHeading);
+    return normalizeHeading(ext.webkitCompassHeading);
   }
-
   if (event.alpha != null && !Number.isNaN(event.alpha)) {
-    // 絶対方位（Android など）
-    if (event.absolute) {
-      return normalizeHeading(360 - event.alpha);
-    }
-
-    // 相対方位: 端末がおおよそ水平のとき alpha を方位として使う
+    if (event.absolute) return normalizeHeading(360 - event.alpha);
     const beta = event.beta ?? 90;
     const gamma = event.gamma ?? 0;
     if (Math.abs(beta) <= 50 && Math.abs(gamma) <= 50) {
       return normalizeHeading(360 - event.alpha);
     }
   }
-
   return null;
 }
 
-function readGeolocationHeading(coords: GeolocationCoordinates): number | null {
+function readGpsHeading(coords: GeolocationCoordinates): number | null {
   const { heading } = coords;
-  if (heading == null || Number.isNaN(heading) || heading < 0) {
-    return null;
-  }
+  if (heading == null || Number.isNaN(heading) || heading < 0) return null;
   return normalizeHeading(heading);
 }
 
 function getInitialHeadingPermission(): HeadingPermissionState {
-  if (typeof window === "undefined") return "unsupported";
-  if (!("DeviceOrientationEvent" in window)) return "unsupported";
-
-  const DeviceOrientation = DeviceOrientationEvent as DeviceOrientationEventConstructor;
-  if (typeof DeviceOrientation.requestPermission === "function") {
-    return "prompt";
+  if (typeof window === "undefined" || !("DeviceOrientationEvent" in window)) {
+    return "unsupported";
   }
+  const Ctor = DeviceOrientationEvent as DeviceOrientationCtor;
+  return typeof Ctor.requestPermission === "function" ? "prompt" : "granted";
+}
 
-  return "granted";
+function getPosition(
+  options: PositionOptions
+): Promise<GeolocationPosition | GeolocationPositionError> {
+  return new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition(resolve, resolve, options);
+  });
 }
 
 export function useGeolocation(options: UseGeolocationOptions = {}) {
-  const {
-    enabled = true,
-    enableHighAccuracy = true,
-    maximumAge = 10_000,
-    timeout = 30_000,
-  } = options;
+  const { enabled = true } = options;
 
   const [position, setPosition] = useState<GeolocationCoords | null>(null);
   const [loading, setLoading] = useState(enabled);
@@ -109,39 +103,7 @@ export function useGeolocation(options: UseGeolocationOptions = {}) {
   const [headingPermission, setHeadingPermission] =
     useState<HeadingPermissionState>(getInitialHeadingPermission);
 
-  const headingListenerActiveRef = useRef(false);
-  const orientationHandlerRef = useRef<(event: DeviceOrientationEvent) => void>(
-    () => {}
-  );
-
-  orientationHandlerRef.current = (event: DeviceOrientationEvent) => {
-    const next = readDeviceHeading(event);
-    if (next == null) return;
-    setHeading((prev) => {
-      if (prev != null && Math.abs(prev - next) < 0.5) return prev;
-      return next;
-    });
-  };
-
-  const onOrientation = useCallback((event: DeviceOrientationEvent) => {
-    orientationHandlerRef.current(event);
-  }, []);
-
-  const stopHeadingListener = useCallback(() => {
-    if (!headingListenerActiveRef.current) return;
-    window.removeEventListener("deviceorientationabsolute", onOrientation, true);
-    window.removeEventListener("deviceorientation", onOrientation, true);
-    headingListenerActiveRef.current = false;
-  }, [onOrientation]);
-
-  const startHeadingListener = useCallback(() => {
-    if (headingListenerActiveRef.current) return;
-    if (!("DeviceOrientationEvent" in window)) return;
-
-    window.addEventListener("deviceorientationabsolute", onOrientation, true);
-    window.addEventListener("deviceorientation", onOrientation, true);
-    headingListenerActiveRef.current = true;
-  }, [onOrientation]);
+  const headingActiveRef = useRef(false);
 
   const applyPosition = useCallback((result: GeolocationPosition) => {
     const coords: GeolocationCoords = {
@@ -150,77 +112,87 @@ export function useGeolocation(options: UseGeolocationOptions = {}) {
       accuracy: result.coords.accuracy,
     };
     setPosition(coords);
-    const geoHeading = readGeolocationHeading(result.coords);
-    if (geoHeading != null) {
-      setHeading(geoHeading);
-    }
     setLoading(false);
     setError(null);
+
+    const gpsHeading = readGpsHeading(result.coords);
+    if (gpsHeading != null) setHeading(gpsHeading);
+
     return coords;
   }, []);
 
-  const retryLocation = useCallback((): Promise<GeolocationCoords | null> => {
-    return new Promise((resolve) => {
-      if (!navigator.geolocation) {
-        setError("このブラウザは位置情報に対応していません");
-        setLoading(false);
-        resolve(null);
-        return;
-      }
+  const onOrientation = useCallback((event: DeviceOrientationEvent) => {
+    const next = readDeviceHeading(event);
+    if (next == null) return;
+    setHeading((prev) => (prev != null && Math.abs(prev - next) < 0.5 ? prev : next));
+  }, []);
 
-      setLoading(true);
-      setError(null);
+  const stopHeading = useCallback(() => {
+    if (!headingActiveRef.current) return;
+    window.removeEventListener("deviceorientationabsolute", onOrientation, true);
+    window.removeEventListener("deviceorientation", onOrientation, true);
+    headingActiveRef.current = false;
+  }, [onOrientation]);
 
-      navigator.geolocation.getCurrentPosition(
-        (result) => {
-          resolve(applyPosition(result));
-        },
-        (result) => {
-          setError(geolocationErrorMessage(result.code));
-          setLoading(false);
-          resolve(null);
-        },
-        { enableHighAccuracy, maximumAge, timeout }
-      );
-    });
-  }, [applyPosition, enableHighAccuracy, maximumAge, timeout]);
+  const startHeading = useCallback(() => {
+    if (headingActiveRef.current || !("DeviceOrientationEvent" in window)) return;
+    window.addEventListener("deviceorientationabsolute", onOrientation, true);
+    window.addEventListener("deviceorientation", onOrientation, true);
+    headingActiveRef.current = true;
+  }, [onOrientation]);
 
   const requestHeadingPermission = useCallback(async (): Promise<boolean> => {
-    if (typeof window === "undefined") return false;
-
-    if (!("DeviceOrientationEvent" in window)) {
+    if (typeof window === "undefined" || !("DeviceOrientationEvent" in window)) {
       setHeadingPermission("unsupported");
       return false;
     }
 
-    const DeviceOrientation =
-      DeviceOrientationEvent as DeviceOrientationEventConstructor;
-
-    if (typeof DeviceOrientation.requestPermission !== "function") {
+    const Ctor = DeviceOrientationEvent as DeviceOrientationCtor;
+    if (typeof Ctor.requestPermission !== "function") {
       setHeadingPermission("granted");
-      startHeadingListener();
+      startHeading();
       return true;
     }
 
     try {
-      const result = await DeviceOrientation.requestPermission();
+      const result = await Ctor.requestPermission();
       if (result === "granted") {
         setHeadingPermission("granted");
-        startHeadingListener();
+        startHeading();
         return true;
       }
       setHeadingPermission("denied");
-      setHeading(null);
-      stopHeadingListener();
+      stopHeading();
       return false;
     } catch {
       setHeadingPermission("denied");
-      setHeading(null);
-      stopHeadingListener();
+      stopHeading();
       return false;
     }
-  }, [startHeadingListener, stopHeadingListener]);
+  }, [startHeading, stopHeading]);
 
+  const retryLocation = useCallback(async (): Promise<GeolocationCoords | null> => {
+    if (!navigator.geolocation) {
+      setError("このブラウザは位置情報に対応していません");
+      setLoading(false);
+      return null;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    const fast = await getPosition(FAST_OPTIONS);
+    if ("coords" in fast) return applyPosition(fast);
+
+    const accurate = await getPosition(WATCH_OPTIONS);
+    if ("coords" in accurate) return applyPosition(accurate);
+
+    setError(geolocationErrorMessage(accurate.code));
+    setLoading(false);
+    return null;
+  }, [applyPosition]);
+
+  // 位置情報: 即時取得 + 継続監視
   useEffect(() => {
     if (!enabled) {
       setLoading(false);
@@ -234,24 +206,35 @@ export function useGeolocation(options: UseGeolocationOptions = {}) {
     }
 
     let cancelled = false;
-    setError(null);
     setLoading(true);
+    setError(null);
 
-    const handleSuccess = (result: GeolocationPosition) => {
-      if (cancelled) return;
-      applyPosition(result);
+    const onSuccess = (result: GeolocationPosition) => {
+      if (!cancelled) applyPosition(result);
     };
 
-    const handleError = (result: GeolocationPositionError) => {
+    const onError = (err: GeolocationPositionError) => {
       if (cancelled) return;
-      setError(geolocationErrorMessage(result.code));
+      setError(geolocationErrorMessage(err.code));
       setLoading(false);
     };
 
+    void (async () => {
+      const fast = await getPosition(FAST_OPTIONS);
+      if (cancelled) return;
+      if ("coords" in fast) {
+        applyPosition(fast);
+      } else {
+        const accurate = await getPosition(WATCH_OPTIONS);
+        if (cancelled) return;
+        if ("coords" in accurate) applyPosition(accurate);
+      }
+    })();
+
     const watchId = navigator.geolocation.watchPosition(
-      handleSuccess,
-      handleError,
-      { enableHighAccuracy, maximumAge, timeout }
+      onSuccess,
+      onError,
+      WATCH_OPTIONS
     );
 
     return () => {
@@ -259,31 +242,20 @@ export function useGeolocation(options: UseGeolocationOptions = {}) {
       navigator.geolocation.clearWatch(watchId);
       setLoading(false);
     };
-  }, [enabled, enableHighAccuracy, maximumAge, timeout, applyPosition]);
+  }, [enabled, applyPosition]);
 
+  // 方位: デスクトップ等は自動開始 / iOS は許可後
   useEffect(() => {
     if (!enabled) {
-      stopHeadingListener();
-      setHeading(null);
+      stopHeading();
       return;
     }
-
     if (headingPermission === "granted") {
-      startHeadingListener();
-      return () => stopHeadingListener();
+      startHeading();
+      return stopHeading;
     }
-
-    stopHeadingListener();
-    // iOS では prompt の間も GPS の heading は維持する（ここで null にしない）
-    if (headingPermission === "denied") {
-      setHeading(null);
-    }
-  }, [
-    enabled,
-    headingPermission,
-    startHeadingListener,
-    stopHeadingListener,
-  ]);
+    stopHeading();
+  }, [enabled, headingPermission, startHeading, stopHeading]);
 
   return {
     position,
