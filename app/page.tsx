@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { AuthGuard } from "@/components/auth-guard";
 import { HomeClient } from "@/components/home-client";
 
 type PageProps = {
@@ -16,7 +17,9 @@ export default async function Page({ searchParams }: PageProps) {
         </div>
       }
     >
-      <HomeClient initialSearchParams={resolvedSearchParams} />
+      <AuthGuard>
+        <HomeClient initialSearchParams={resolvedSearchParams} />
+      </AuthGuard>
     </Suspense>
   );
 }
