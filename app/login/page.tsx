@@ -6,8 +6,8 @@ export const metadata = {
 };
 
 export default function LoginPage() {
-  // 💡 不具合の原因だった関数をスキップし、ここで確実にIDとパスワードを定義します。
-  // 万が一環境変数が空でも、右側の "wmdMap_2026" が身代わりになります。
+  // 💡 不具合の原因だった仲介関数を使わず、ここで直接環境変数を注入します。
+  // 万が一読み込みが空でも、予備（||）として "wmdMap_2026" が身代わりになります。
   const expectedId = process.env.NEXT_PUBLIC_APP_ID || "wmdMap_2026";
   const expectedPassword = process.env.NEXT_PUBLIC_APP_PASSWORD || "wmdMap_2026";
 
