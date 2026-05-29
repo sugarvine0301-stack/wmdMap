@@ -1,14 +1,13 @@
-import { AUTH_COOKIE_NAME, AUTH_ENV_KEYS } from "@/lib/auth-config";
+import { AUTH_COOKIE_NAME } from "@/lib/auth-config";
+import {
+  getPublicAppCredentials,
+  isPublicAppAuthConfigured,
+  verifyPublicAppLogin,
+} from "@/lib/auth-public-env";
 import { createSessionToken } from "@/lib/auth-token";
 
 export function getAuthCredentials() {
-  return {
-    id: process.env.NEXT_PUBLIC_APP_ID?.trim() ?? process.env[AUTH_ENV_KEYS.id]?.trim() ?? "",
-    password:
-      process.env.NEXT_PUBLIC_APP_PASSWORD ??
-      process.env[AUTH_ENV_KEYS.password] ??
-      "",
-  };
+  return getPublicAppCredentials();
 }
 
 export function getSessionToken(): string {
@@ -17,29 +16,19 @@ export function getSessionToken(): string {
   return createSessionToken(id, password);
 }
 
-export function isAuthConfigured(): boolean {
-  const { id, password } = getAuthCredentials();
-  return Boolean(id && password);
-}
+export { isPublicAppAuthConfigured as isAuthConfigured };
 
 export function isValidSessionToken(token: string | undefined | null): boolean {
   if (!token) return false;
 
   const { id, password } = getAuthCredentials();
-  if (id && password) {
-    return token === createSessionToken(id, password);
-  }
+  if (!id || !password) return false;
 
-  // サーバー環境変数未設定時（Vercel 等）: ログイン API が設定したトークンを許可
-  return token.length > 10;
+  return token === createSessionToken(id, password);
 }
 
 export function verifyLogin(id: string, password: string): boolean {
-  const creds = getAuthCredentials();
-  if (creds.id && creds.password) {
-    return id.trim() === creds.id && password === creds.password;
-  }
-  return Boolean(id.trim() && password);
+  return verifyPublicAppLogin(id, password);
 }
 
 export function getSessionCookieOptions() {

@@ -2,14 +2,15 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  isClientAuthConfigured,
-  setClientAuthSession,
-  verifyClientLogin,
-} from "@/lib/auth-client";
+import { setClientAuthSession } from "@/lib/auth-client";
 import { appUi } from "@/lib/ui";
 
-export function LoginForm() {
+type LoginFormProps = {
+  expectedId: string;
+  expectedPassword: string;
+};
+
+export function LoginForm({ expectedId, expectedPassword }: LoginFormProps) {
   const router = useRouter();
   const [id, setId] = useState("");
   const [password, setPassword] = useState("");
@@ -24,14 +25,14 @@ export function LoginForm() {
     const trimmedId = id.trim();
 
     try {
-      if (!isClientAuthConfigured()) {
+      if (!expectedId || !expectedPassword) {
         setError(
           "認証設定が読み込めません。.env.local に NEXT_PUBLIC_APP_ID と NEXT_PUBLIC_APP_PASSWORD を設定し、サーバーを再起動してください。"
         );
         return;
       }
 
-      if (!verifyClientLogin(trimmedId, password)) {
+      if (trimmedId !== expectedId || password !== expectedPassword) {
         setError("ID またはパスワードが正しくありません");
         return;
       }
@@ -118,7 +119,10 @@ export function LoginForm() {
   );
 }
 
-export function LoginPageContent() {
+export function LoginPageContent({
+  expectedId,
+  expectedPassword,
+}: LoginFormProps) {
   return (
     <div
       className={`flex min-h-[100dvh] items-center justify-center ${appUi.pageBg} px-4 py-8`}
@@ -134,7 +138,10 @@ export function LoginPageContent() {
             月明洞マップ
           </h1>
         </header>
-        <LoginForm />
+        <LoginForm
+          expectedId={expectedId}
+          expectedPassword={expectedPassword}
+        />
       </div>
     </div>
   );
