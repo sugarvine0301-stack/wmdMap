@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import {
   AUTH_COOKIE_NAME,
+  getAuthCredentials,
   getSessionCookieOptions,
-  getSessionToken,
-  isAuthConfigured,
   verifyLogin,
 } from "@/lib/auth-server";
+import { createSessionToken } from "@/lib/auth-token";
 
 export async function POST(request: Request) {
   let body: { id?: string; password?: string };
@@ -28,16 +28,6 @@ export async function POST(request: Request) {
     );
   }
 
-  if (!isAuthConfigured()) {
-    return NextResponse.json(
-      {
-        error:
-          "サーバーの認証設定が不完全です（NEXT_PUBLIC_APP_ID / NEXT_PUBLIC_APP_PASSWORD を .env.local に設定してください）",
-      },
-      { status: 500 }
-    );
-  }
-
   if (!verifyLogin(id, password)) {
     return NextResponse.json(
       { error: "ID またはパスワードが正しくありません" },
@@ -45,8 +35,13 @@ export async function POST(request: Request) {
     );
   }
 
-  const sessionToken = getSessionToken();
+  const creds = getAuthCredentials();
+  const token =
+    creds.id && creds.password
+      ? createSessionToken(creds.id, creds.password)
+      : createSessionToken(id, password);
+
   const response = NextResponse.json({ ok: true });
-  response.cookies.set(AUTH_COOKIE_NAME, sessionToken, getSessionCookieOptions());
+  response.cookies.set(AUTH_COOKIE_NAME, token, getSessionCookieOptions());
   return response;
 }

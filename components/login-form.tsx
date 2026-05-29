@@ -2,7 +2,11 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { setClientAuthSession } from "@/lib/auth-client";
+import {
+  isClientAuthConfigured,
+  setClientAuthSession,
+  verifyClientLogin,
+} from "@/lib/auth-client";
 import { appUi } from "@/lib/ui";
 
 export function LoginForm() {
@@ -17,11 +21,25 @@ export function LoginForm() {
     setError(null);
     setLoading(true);
 
+    const trimmedId = id.trim();
+
     try {
+      if (!isClientAuthConfigured()) {
+        setError(
+          "認証設定が読み込めません。.env.local に NEXT_PUBLIC_APP_ID と NEXT_PUBLIC_APP_PASSWORD を設定し、サーバーを再起動してください。"
+        );
+        return;
+      }
+
+      if (!verifyClientLogin(trimmedId, password)) {
+        setError("ID またはパスワードが正しくありません");
+        return;
+      }
+
       const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, password }),
+        body: JSON.stringify({ id: trimmedId, password }),
       });
 
       const data = (await response.json()) as { error?: string };
