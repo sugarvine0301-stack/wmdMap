@@ -25,3 +25,10 @@ export type Topography = {
   image_url: string | null;
   created_at: string;
 };
+
+export type Route = {
+  id: string;
+  route_name: string;
+  path_data: [number, number][];
+  created_at: string;
+};

@@ -10,6 +10,7 @@ import {
   removeUserLocationFromMap,
   updateUserLocationOnMap,
 } from "@/lib/map-user-location";
+import { ensureRouteLayers, removeRouteLayers } from "@/lib/map-routes";
 import { appUi } from "@/lib/ui";
 import type { Spot } from "@/lib/supabase";
 
@@ -296,6 +297,7 @@ export function MapView({
     mapRef.current = map;
 
     map.on("load", () => {
+      ensureRouteLayers(map);
       setMapReady(true);
     });
 
@@ -305,6 +307,7 @@ export function MapView({
 
     return () => {
       closePopup();
+      removeRouteLayers(map);
       removeUserLocationFromMap(map);
       for (const entry of markersBySpotIdRef.current.values()) {
         entry.marker.remove();
